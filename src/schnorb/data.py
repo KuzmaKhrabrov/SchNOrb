@@ -12,7 +12,7 @@ from tqdm import tqdm
 import schnetpack as spk
 from schnorb import SchNOrbProperties
 from schnorb.rotations import OrcaRotator, rand_rotation_matrix
-from schnorb.utils import check_nan_np
+from schnorb.utils import check_nan_np, get_average_energies, get_number_orbitals
 
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
 
@@ -912,6 +912,117 @@ class SchNOrbAtomsData(spk.data.AtomsData):
     def __getitem__(self, idx):
         at, properties = self.get_properties(idx)
 
+        if self.add_rotations:
+            H = properties[SchNOrbProperties.ham_prop].numpy()
+            S = properties[SchNOrbProperties.ov_prop].numpy()
+
+            isnan = True
+            while isnan:
+                rnd_rot = rand_rotation_matrix()
+
+                if SchNOrbProperties.f_prop in properties.keys():
+                    Hrot, Srot, pos_rot, force_rot = self.rotator.transform(
+                        rnd_rot, H, S, at.numbers, at.positions,
+                        properties[SchNOrbProperties.f_prop].numpy()
+                    )
+                    isnan = check_nan_np(Hrot, Srot, pos_rot, force_rot)
+                else:
+                    Hrot, Srot, pos_rot = self.rotator.transform(
+                        rnd_rot, H, S, at.numbers, at.positions
+                    )
+                    isnan = check_nan_np(Hrot, Srot, pos_rot)
+
+            at.set_positions(pos_rot)
+            properties[SchNOrbProperties.R] = torch.FloatTensor(pos_rot)
+            properties[SchNOrbProperties.ham_prop] = torch.FloatTensor(Hrot)
+            properties[SchNOrbProperties.ov_prop] = torch.FloatTensor(Srot)
+            if SchNOrbProperties.f_prop in properties.keys():
+                properties[SchNOrbProperties.f_prop] = torch.FloatTensor(force_rot)
+
+        # get atom environment
+        nbh_idx, offsets = self.environment_provider.get_environment(at)
+
+        properties[SchNOrbProperties.neighbors] = torch.LongTensor(
+            nbh_idx.astype(np.int))
+        properties[SchNOrbProperties.cell_offset] = torch.FloatTensor(
+            offsets.astype(np.float32))
+        properties['_idx'] = torch.LongTensor(np.array([idx], dtype=np.int))
+
+        if self.collect_triples:
+            nbh_idx_j, nbh_idx_k = spk.environment.collect_atom_triples(nbh_idx)
+            properties[SchNOrbProperties.neighbor_pairs_j] = torch.LongTensor(
+                nbh_idx_j.astype(np.int))
+            properties[SchNOrbProperties.neighbor_pairs_k] = torch.LongTensor(
+                nbh_idx_k.astype(np.int))
+
+        return properties
+
+
+class PhiSNetAtomsData(spk.data.AtomsData):
+
+    def __init__(self, *args, add_rotations=True, rotator_cls=OrcaRotator,
+                 **kwargs):
+        super(PhiSNetAtomsData, self).__init__(*args, **kwargs)
+        self.args = args
+        self.kwargs = kwargs
+        self.add_rotations = add_rotations
+        self.database = HamiltonianDatabase(dbpath)
+        self.basisdef = self.get_basisdef()
+        self.rotator_cls = rotator_cls
+        self.rotator = rotator_cls(self.basisdef)
+
+    def calculate_property(self, property_name):
+        if property_name == "orbital_energies":
+            return get_average_energies(self, get_number_orbitals(self))
+
+    def get_basisdef(self):
+        basis_def = []
+        Z = set(self.database.Z)
+        max_orbitals = 0
+        for z in Z:
+            L = 0
+            for m in db.get_orbitals(z):
+                L += 2 * m + 1
+            if L > max_orbitals:
+                max_orbitals = L
+
+        for z in range(0, max(Z) + 1):
+            if z not in set(self.database.Z):
+                basis_def.append([[0, 0, 0, 0, 0]] * max_orbitals)
+                continue
+
+            orbitals_schnorb = []
+            orbital_id = 0
+            for m_id, m in enumerate(self.database.get_orbitals(z)):
+                for l in range(-m, m + 1):
+                    orbitals_schnorb.append([orbital_id, 0, m_id + 1, m, l])
+                    orbital_id += 1
+            if len(orbitals_schnorb) < max_orbitals:
+                orbitals_schnorb += [[0, 0, 0, 0, 0]] * (max_orbitals - len(orbitals_schnorb))
+            basis_def.append(orbitals_schnorb)
+        return np.array(basis_def)
+
+    def create_subset(self, idx):
+        idx = np.array(idx)
+        subidx = idx if self.subset is None else np.array(self.subset)[idx]
+
+        return SchNOrbAtomsData(*self.args,
+                                add_rotations=self.add_rotations,
+                                rotator_cls=self.rotator_cls,
+                                subset=subidx,
+                                **self.kwargs)
+
+    def __getitem__(self, idx):
+        Z, R, E, F, H, S, _ = self.database[batch]
+        at = ase.Atoms(Z, R)
+        properties = \
+            {SchNOrbProperties.en_prop: E,
+             SchNOrbProperties.ham_prop: H,
+             SchNOrbProperties.core_prop: C,
+             SchNOrbProperties.ov_prop: S,
+             }
+        if F:
+            properties[SchNOrbProperties.f_prop] = F
         if self.add_rotations:
             H = properties[SchNOrbProperties.ham_prop].numpy()
             S = properties[SchNOrbProperties.ov_prop].numpy()

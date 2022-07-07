@@ -10,6 +10,7 @@ class SchNOrbProperties(Properties):
     f_prop = 'forces'
     psi_prop = 'psi'
     eps_prop = 'eps'
+    core_prop = 'core'
 
 
 import schnorb.data
