@@ -5,7 +5,6 @@ import os
 import sys
 from shutil import copyfile, rmtree
 
-#print (os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 import numpy as np
@@ -79,6 +78,9 @@ def get_parser():
                               default=5)
 
     # data split
+    train_parser.add_argument('--subset',
+                              help='Path / destination of npy with subset idx',
+                              default=None)
     train_parser.add_argument('--split_path',
                               help='Path / destination of npz with data splits',
                               default=None)
@@ -250,8 +252,8 @@ def train(args, model, train_loader, val_loader, device):
 
     # setup loss function
     def loss(batch, result):
-        #print (batch[SchNOrbProperties.ham_prop].shape)
-        #print (result[SchNOrbProperties.ham_prop].shape)
+        # print (batch[SchNOrbProperties.ham_prop].shape)
+        # print (result[SchNOrbProperties.ham_prop].shape)
         diff = batch[SchNOrbProperties.ham_prop] - result[SchNOrbProperties.ham_prop]
         diff = diff ** 2
         err_ham = torch.mean(diff)
@@ -484,11 +486,15 @@ if __name__ == '__main__':
         rot = AimsRotator
     else:
         rot = OrcaRotator
+    subset = None
+    if train_args.subset:
+        subset = np.load(train_args.subset)
 
     hamiltonian_data = PhiSNetAtomsData(args.datapath,
                                         load_only=properties,
                                         add_rotations=train_args.rndrot,
-                                        rotator_cls=rot)
+                                        rotator_cls=rot,
+                                        subset=train_args.subset)
 
     basisdef = hamiltonian_data.basisdef
     split_path = os.path.join(args.modelpath, 'splits_by_mols.npz')
@@ -497,9 +503,8 @@ if __name__ == '__main__':
             copyfile(args.split_path, split_path)
 
     data_train, data_val, data_test = train_test_split(hamiltonian_data,
-        *train_args.split, split_file=split_path)
-    print (len(hamiltonian_data), len(data_train), len(data_test))
-    print (type(data_train))
+                                                       *train_args.split, split_file=split_path)
+
     if args.mode == 'train':
         orbital_energies = data_train.calculate_property('orbital_energies')
         print(orbital_energies)
@@ -525,8 +530,8 @@ if __name__ == '__main__':
         sys.exit(0)
 
     device = torch.device("cuda" if args.cuda else "cpu")
-    #device = torch.device("cuda:1")
-    #device = torch.device("cpu")
+    # device = torch.device("cuda:1")
+    # device = torch.device("cpu")
     if args.mode == 'eval' or args.mode == 'pred':
         model = torch.load(os.path.join(args.modelpath, 'best_model'), map_location=device)
     else:
