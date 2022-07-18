@@ -10,9 +10,12 @@ from ase.units import Ha, Bohr
 from tqdm import tqdm
 
 import schnetpack as spk
+from schnetpack.environment import SimpleEnvironmentProvider
+from schnetpack.data.atoms import _convert_atoms
 from schnorb import SchNOrbProperties
 from schnorb.rotations import OrcaRotator, rand_rotation_matrix
 from schnorb.utils import check_nan_np, get_average_energies, get_number_orbitals
+from schnorb.hamiltonian_database import HamiltonianDatabase 
 
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
 
@@ -954,22 +957,31 @@ class SchNOrbAtomsData(spk.data.AtomsData):
                 nbh_idx_j.astype(np.int))
             properties[SchNOrbProperties.neighbor_pairs_k] = torch.LongTensor(
                 nbh_idx_k.astype(np.int))
-
+        
         return properties
 
 
-class PhiSNetAtomsData(spk.data.AtomsData):
+class PhiSNetAtomsData(torch.utils.data.Dataset):
 
     def __init__(self, *args, add_rotations=True, rotator_cls=OrcaRotator,
                  **kwargs):
-        super(PhiSNetAtomsData, self).__init__(*args, **kwargs)
+        #super(PhiSNetAtomsData, self).__init__(*args, **kwargs)
         self.args = args
         self.kwargs = kwargs
         self.add_rotations = add_rotations
-        self.database = HamiltonianDatabase(dbpath)
+        self.database = HamiltonianDatabase(args[0])
         self.basisdef = self.get_basisdef()
         self.rotator_cls = rotator_cls
         self.rotator = rotator_cls(self.basisdef)
+        self.subset = kwargs.get("subset")
+        self.environment_provider = SimpleEnvironmentProvider()
+        self.collect_triples = False
+        self.center_positions = True
+
+    def __len__(self):
+        if self.subset is not None:
+            return len(self.subset)
+        return len(self.database)
 
     def calculate_property(self, property_name):
         if property_name == "orbital_energies":
@@ -981,7 +993,7 @@ class PhiSNetAtomsData(spk.data.AtomsData):
         max_orbitals = 0
         for z in Z:
             L = 0
-            for m in db.get_orbitals(z):
+            for m in self.database.get_orbitals(z):
                 L += 2 * m + 1
             if L > max_orbitals:
                 max_orbitals = L
@@ -1004,25 +1016,36 @@ class PhiSNetAtomsData(spk.data.AtomsData):
 
     def create_subset(self, idx):
         idx = np.array(idx)
-        subidx = idx if self.subset is None else np.array(self.subset)[idx]
+        subidx = idx
 
-        return SchNOrbAtomsData(*self.args,
+        return PhiSNetAtomsData(*self.args,
                                 add_rotations=self.add_rotations,
                                 rotator_cls=self.rotator_cls,
                                 subset=subidx,
                                 **self.kwargs)
 
     def __getitem__(self, idx):
-        Z, R, E, F, H, S, _ = self.database[batch]
-        at = ase.Atoms(Z, R)
+        if self.subset is not None:
+            idx = self.subset[idx]
+
+        Z, R, E, F, H, S, C = self.database[idx]
+        at = Atoms(Z, R)
         properties = \
-            {SchNOrbProperties.en_prop: E,
-             SchNOrbProperties.ham_prop: H,
-             SchNOrbProperties.core_prop: C,
-             SchNOrbProperties.ov_prop: S,
+            {SchNOrbProperties.en_prop: torch.FloatTensor(E),
+             SchNOrbProperties.ham_prop: torch.FloatTensor(H),
+             SchNOrbProperties.core_prop: torch.FloatTensor(C),
+             SchNOrbProperties.ov_prop: torch.FloatTensor(S),
              }
-        if F:
-            properties[SchNOrbProperties.f_prop] = F
+        
+        properties = _convert_atoms(
+            at,
+            environment_provider=self.environment_provider,
+            collect_triples=self.collect_triples,
+            center_positions=self.center_positions,
+            output=properties,
+        )
+        if F is not None:
+            properties[SchNOrbProperties.f_prop] = torch.FloatTensor(F)
         if self.add_rotations:
             H = properties[SchNOrbProperties.ham_prop].numpy()
             S = properties[SchNOrbProperties.ov_prop].numpy()
@@ -1065,5 +1088,7 @@ class PhiSNetAtomsData(spk.data.AtomsData):
                 nbh_idx_j.astype(np.int))
             properties[SchNOrbProperties.neighbor_pairs_k] = torch.LongTensor(
                 nbh_idx_k.astype(np.int))
-
+        
+        #print (properties)
+        #raise
         return properties

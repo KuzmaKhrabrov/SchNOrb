@@ -5,7 +5,8 @@ import os
 import sys
 from shutil import copyfile, rmtree
 
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+#print (os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 import numpy as np
 import torch
@@ -21,8 +22,9 @@ from schnetpack.atomistic import AtomisticModel
 from schnetpack.nn.cutoff import HardCutoff, CosineCutoff, MollifierCutoff
 from schnetpack.train import HeatmapMAE, MeanAbsoluteError, RootMeanSquaredError
 from schnetpack.utils import read_from_json
+from schnetpack.data import train_test_split
 from schnorb import SchNOrbProperties
-from schnorb.data import SchNOrbAtomsData
+from schnorb.data import SchNOrbAtomsData, PhiSNetAtomsData
 from schnorb.rotations import OrcaRotator, AimsRotator
 from schnorb.utils import Basissets
 
@@ -82,7 +84,7 @@ def get_parser():
                               default=None)
     train_parser.add_argument('--split',
                               help='Split into [train] [validation] and remaining for testing',
-                              type=int, nargs=2, default=[None, None])
+                              type=float, nargs=2, default=[None, None])
     train_parser.add_argument('--max_epochs', type=int,
                               help='Number of training epochs',
                               default=500000)
@@ -240,8 +242,6 @@ def train(args, model, train_loader, val_loader, device):
                                    metrics)
         hooks.append(logger)
     elif args.logger == 'tensorboard':
-        metrics.append(HeatmapMAE(SchNOrbProperties.ham_prop))
-        metrics.append(HeatmapMAE(SchNOrbProperties.ov_prop))
 
         logger = spk.train.TensorboardHook(os.path.join(args.modelpath, 'log'),
                                            metrics, log_histogram=True,
@@ -250,6 +250,8 @@ def train(args, model, train_loader, val_loader, device):
 
     # setup loss function
     def loss(batch, result):
+        #print (batch[SchNOrbProperties.ham_prop].shape)
+        #print (result[SchNOrbProperties.ham_prop].shape)
         diff = batch[SchNOrbProperties.ham_prop] - result[SchNOrbProperties.ham_prop]
         diff = diff ** 2
         err_ham = torch.mean(diff)
@@ -268,7 +270,6 @@ def train(args, model, train_loader, val_loader, device):
             err_energy = 0.1 * err_energy + 0.9 * torch.mean(diff)
 
         err_sq = err_ham + err_overlap + err_energy
-
         if torch.sum(torch.isnan(err_sq)) > 0:
             print("NaN loss")
             return None
@@ -495,8 +496,10 @@ if __name__ == '__main__':
         if args.split_path is not None:
             copyfile(args.split_path, split_path)
 
-    data_train, data_val, data_test = hamiltonian_data.create_splits(
+    data_train, data_val, data_test = train_test_split(hamiltonian_data,
         *train_args.split, split_file=split_path)
+    print (len(hamiltonian_data), len(data_train), len(data_test))
+    print (type(data_train))
     if args.mode == 'train':
         orbital_energies = data_train.calculate_property('orbital_energies')
         print(orbital_energies)
@@ -505,10 +508,10 @@ if __name__ == '__main__':
 
     train_loader = spk.data.AtomsLoader(data_train, batch_size=args.batch_size,
                                         sampler=RandomSampler(data_train),
-                                        num_workers=4, pin_memory=True)
+                                        num_workers=1, pin_memory=True)
 
     val_loader = spk.data.AtomsLoader(data_val, batch_size=args.batch_size,
-                                      num_workers=4, pin_memory=True)
+                                      num_workers=1, pin_memory=True)
 
     if args.mode == 'train':
         mean, stddev = train_loader.get_statistics(SchNOrbProperties.en_prop, True)
@@ -522,7 +525,8 @@ if __name__ == '__main__':
         sys.exit(0)
 
     device = torch.device("cuda" if args.cuda else "cpu")
-    device = torch.device("cuda:1")
+    #device = torch.device("cuda:1")
+    #device = torch.device("cpu")
     if args.mode == 'eval' or args.mode == 'pred':
         model = torch.load(os.path.join(args.modelpath, 'best_model'), map_location=device)
     else:
