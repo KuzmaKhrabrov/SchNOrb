@@ -5,7 +5,6 @@ import os
 import sys
 from shutil import copyfile, rmtree
 
-#print (os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 sys.path.append(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
 
 import numpy as np
@@ -52,8 +51,8 @@ def get_parser():
     ## training
     train_parser = argparse.ArgumentParser(add_help=False,
                                            parents=[cmd_parser])
-    train_parser.add_argument('datapath', help='Path to ASE DB')
-    train_parser.add_argument('modelpath',
+    train_parser.add_argument('--datapath', help='Path to ASE DB')
+    train_parser.add_argument('--modelpath',
                               help='Path / destination to (re)store model')
     train_parser.add_argument('--seed', type=int, default=None,
                               help='Set random seed for torch and numpy.')
@@ -79,6 +78,9 @@ def get_parser():
                               default=5)
 
     # data split
+    train_parser.add_argument('--subset',
+                              help='Path / destination of npy with subset idx',
+                              default=None)
     train_parser.add_argument('--split_path',
                               help='Path / destination of npz with data splits',
                               default=None)
@@ -102,8 +104,8 @@ def get_parser():
 
     ## evaluation
     eval_parser = argparse.ArgumentParser(add_help=False, parents=[cmd_parser])
-    eval_parser.add_argument('datapath', help='Path of QM9 dataset directory')
-    eval_parser.add_argument('modelpath', help='Path of stored model')
+    eval_parser.add_argument('--datapath', help='Path of QM9 dataset directory')
+    eval_parser.add_argument('--modelpath', help='Path of stored model')
     eval_parser.add_argument('--split',
                              help='Evaluate on trained model on given split',
                              choices=['train', 'validation', 'test'],
@@ -174,8 +176,8 @@ def get_parser():
                                                                 schnet_parser])
 
     pred_parser = argparse.ArgumentParser(add_help=False, parents=[cmd_parser])
-    pred_parser.add_argument('datapath', help='Path of QM9 dataset directory')
-    pred_parser.add_argument('modelpath', help='Path of stored model')
+    pred_parser.add_argument('--datapath', help='Path of QM9 dataset directory')
+    pred_parser.add_argument('--modelpath', help='Path of stored model')
     pred_parser.add_argument('--split',
                              help='Evaluate on trained model on given split',
                              choices=['train', 'validation', 'test'],
@@ -184,9 +186,9 @@ def get_parser():
                              default=None)
 
     subparser_export = cmd_subparsers.add_parser('export', help='Export help')
-    subparser_export.add_argument('datapath', help='Path of stored model')
-    subparser_export.add_argument('modelpath', help='Path of stored model')
-    subparser_export.add_argument('destpath',
+    subparser_export.add_argument('--datapath', help='Path of stored model')
+    subparser_export.add_argument('--modelpath', help='Path of stored model')
+    subparser_export.add_argument('--destpath',
                                   help='Destination path for exported model')
     subparser_export.add_argument('--batch_size', type=int,
                                   help='Number of validation scripts',
@@ -250,8 +252,8 @@ def train(args, model, train_loader, val_loader, device):
 
     # setup loss function
     def loss(batch, result):
-        #print (batch[SchNOrbProperties.ham_prop].shape)
-        #print (result[SchNOrbProperties.ham_prop].shape)
+        # print (batch[SchNOrbProperties.ham_prop].shape)
+        # print (result[SchNOrbProperties.ham_prop].shape)
         diff = batch[SchNOrbProperties.ham_prop] - result[SchNOrbProperties.ham_prop]
         diff = diff ** 2
         err_ham = torch.mean(diff)
@@ -453,6 +455,8 @@ def export_model(args, basisdef, orbital_energies, mean, stddev):
 
 
 if __name__ == '__main__':
+    sys.argv.insert(1,"schnet")
+    sys.argv.insert(1,"train")
     parser = get_parser()
     args = parser.parse_args()
 
@@ -484,22 +488,25 @@ if __name__ == '__main__':
         rot = AimsRotator
     else:
         rot = OrcaRotator
+    subset = None
+    if train_args.subset:
+        subset = np.load(train_args.subset)
 
     hamiltonian_data = PhiSNetAtomsData(args.datapath,
                                         load_only=properties,
                                         add_rotations=train_args.rndrot,
-                                        rotator_cls=rot)
+                                        rotator_cls=rot,
+                                        subset=subset)
 
     basisdef = hamiltonian_data.basisdef
     split_path = os.path.join(args.modelpath, 'splits_by_mols.npz')
     if args.mode == 'train':
         if args.split_path is not None:
             copyfile(args.split_path, split_path)
-
+    print( len(hamiltonian_data))
     data_train, data_val, data_test = train_test_split(hamiltonian_data,
-        *train_args.split, split_file=split_path)
-    print (len(hamiltonian_data), len(data_train), len(data_test))
-    print (type(data_train))
+                                                       *train_args.split, split_file=split_path)
+
     if args.mode == 'train':
         orbital_energies = data_train.calculate_property('orbital_energies')
         print(orbital_energies)
@@ -525,8 +532,8 @@ if __name__ == '__main__':
         sys.exit(0)
 
     device = torch.device("cuda" if args.cuda else "cpu")
-    #device = torch.device("cuda:1")
-    #device = torch.device("cpu")
+    # device = torch.device("cuda:1")
+    # device = torch.device("cpu")
     if args.mode == 'eval' or args.mode == 'pred':
         model = torch.load(os.path.join(args.modelpath, 'best_model'), map_location=device)
     else:
@@ -566,3 +573,4 @@ if __name__ == '__main__':
         np.savez(predict_file, **results, **inputs)
     else:
         print('Unknown mode:', args.mode)
+

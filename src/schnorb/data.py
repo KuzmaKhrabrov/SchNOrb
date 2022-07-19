@@ -1015,13 +1015,17 @@ class PhiSNetAtomsData(torch.utils.data.Dataset):
         return np.array(basis_def)
 
     def create_subset(self, idx):
+        if not idx:
+            return None
         idx = np.array(idx)
         subidx = idx
-
+        if self.subset is not None:
+            subidx = self.subset[idx]
+        kwargs = self.kwargs.copy()
+        kwargs["subset"] =  subidx
         return PhiSNetAtomsData(*self.args,
                                 add_rotations=self.add_rotations,
                                 rotator_cls=self.rotator_cls,
-                                subset=subidx,
                                 **self.kwargs)
 
     def __getitem__(self, idx):
