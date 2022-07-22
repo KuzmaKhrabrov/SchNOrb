@@ -51,8 +51,8 @@ def get_parser():
     ## training
     train_parser = argparse.ArgumentParser(add_help=False,
                                            parents=[cmd_parser])
-    train_parser.add_argument('datapath', help='Path to ASE DB')
-    train_parser.add_argument('modelpath',
+    train_parser.add_argument('--datapath', help='Path to ASE DB')
+    train_parser.add_argument('--modelpath',
                               help='Path / destination to (re)store model')
     train_parser.add_argument('--seed', type=int, default=None,
                               help='Set random seed for torch and numpy.')
@@ -104,8 +104,8 @@ def get_parser():
 
     ## evaluation
     eval_parser = argparse.ArgumentParser(add_help=False, parents=[cmd_parser])
-    eval_parser.add_argument('datapath', help='Path of QM9 dataset directory')
-    eval_parser.add_argument('modelpath', help='Path of stored model')
+    eval_parser.add_argument('--datapath', help='Path of QM9 dataset directory')
+    eval_parser.add_argument('--modelpath', help='Path of stored model')
     eval_parser.add_argument('--split',
                              help='Evaluate on trained model on given split',
                              choices=['train', 'validation', 'test'],
@@ -176,8 +176,8 @@ def get_parser():
                                                                 schnet_parser])
 
     pred_parser = argparse.ArgumentParser(add_help=False, parents=[cmd_parser])
-    pred_parser.add_argument('datapath', help='Path of QM9 dataset directory')
-    pred_parser.add_argument('modelpath', help='Path of stored model')
+    pred_parser.add_argument('--datapath', help='Path of QM9 dataset directory')
+    pred_parser.add_argument('--modelpath', help='Path of stored model')
     pred_parser.add_argument('--split',
                              help='Evaluate on trained model on given split',
                              choices=['train', 'validation', 'test'],
@@ -186,9 +186,9 @@ def get_parser():
                              default=None)
 
     subparser_export = cmd_subparsers.add_parser('export', help='Export help')
-    subparser_export.add_argument('datapath', help='Path of stored model')
-    subparser_export.add_argument('modelpath', help='Path of stored model')
-    subparser_export.add_argument('destpath',
+    subparser_export.add_argument('--datapath', help='Path of stored model')
+    subparser_export.add_argument('--modelpath', help='Path of stored model')
+    subparser_export.add_argument('--destpath',
                                   help='Destination path for exported model')
     subparser_export.add_argument('--batch_size', type=int,
                                   help='Number of validation scripts',
@@ -455,6 +455,8 @@ def export_model(args, basisdef, orbital_energies, mean, stddev):
 
 
 if __name__ == '__main__':
+    sys.argv.insert(1,"schnet")
+    sys.argv.insert(1,"train")
     parser = get_parser()
     args = parser.parse_args()
 
@@ -494,14 +496,14 @@ if __name__ == '__main__':
                                         load_only=properties,
                                         add_rotations=train_args.rndrot,
                                         rotator_cls=rot,
-                                        subset=train_args.subset)
+                                        subset=subset)
 
     basisdef = hamiltonian_data.basisdef
     split_path = os.path.join(args.modelpath, 'splits_by_mols.npz')
     if args.mode == 'train':
         if args.split_path is not None:
             copyfile(args.split_path, split_path)
-
+    print( len(hamiltonian_data))
     data_train, data_val, data_test = train_test_split(hamiltonian_data,
                                                        *train_args.split, split_file=split_path)
 
@@ -571,3 +573,4 @@ if __name__ == '__main__':
         np.savez(predict_file, **results, **inputs)
     else:
         print('Unknown mode:', args.mode)
+
