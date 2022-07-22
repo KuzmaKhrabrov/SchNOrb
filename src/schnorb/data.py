@@ -15,7 +15,7 @@ from schnetpack.data.atoms import _convert_atoms
 from schnorb import SchNOrbProperties
 from schnorb.rotations import OrcaRotator, rand_rotation_matrix
 from schnorb.utils import check_nan_np, get_average_energies, get_number_orbitals
-from schnorb.hamiltonian_database import HamiltonianDatabase 
+from schnorb.hamiltonian_database import HamiltonianDatabase
 
 logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
 
@@ -957,7 +957,7 @@ class SchNOrbAtomsData(spk.data.AtomsData):
                 nbh_idx_j.astype(np.int))
             properties[SchNOrbProperties.neighbor_pairs_k] = torch.LongTensor(
                 nbh_idx_k.astype(np.int))
-        
+
         return properties
 
 
@@ -965,7 +965,7 @@ class PhiSNetAtomsData(torch.utils.data.Dataset):
 
     def __init__(self, *args, add_rotations=True, rotator_cls=OrcaRotator,
                  **kwargs):
-        #super(PhiSNetAtomsData, self).__init__(*args, **kwargs)
+        # super(PhiSNetAtomsData, self).__init__(*args, **kwargs)
         self.args = args
         self.kwargs = kwargs
         self.add_rotations = add_rotations
@@ -1015,14 +1015,18 @@ class PhiSNetAtomsData(torch.utils.data.Dataset):
         return np.array(basis_def)
 
     def create_subset(self, idx):
+        if not idx:
+            return None
         idx = np.array(idx)
         subidx = idx
-
+        if self.subset is not None:
+            subidx = self.subset[idx]
+        kwargs = self.kwargs.copy()
+        kwargs["subset"] = subidx
         return PhiSNetAtomsData(*self.args,
                                 add_rotations=self.add_rotations,
                                 rotator_cls=self.rotator_cls,
-                                subset=subidx,
-                                **self.kwargs)
+                                **kwargs)
 
     def __getitem__(self, idx):
         if self.subset is not None:
@@ -1036,7 +1040,7 @@ class PhiSNetAtomsData(torch.utils.data.Dataset):
              SchNOrbProperties.core_prop: torch.FloatTensor(C),
              SchNOrbProperties.ov_prop: torch.FloatTensor(S),
              }
-        
+
         properties = _convert_atoms(
             at,
             environment_provider=self.environment_provider,
@@ -1088,7 +1092,5 @@ class PhiSNetAtomsData(torch.utils.data.Dataset):
                 nbh_idx_j.astype(np.int))
             properties[SchNOrbProperties.neighbor_pairs_k] = torch.LongTensor(
                 nbh_idx_k.astype(np.int))
-        
-        #print (properties)
-        #raise
+
         return properties

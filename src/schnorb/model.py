@@ -28,6 +28,7 @@ def mask_padded_orbitals(matrix, mask, result_shape):
                                          value=0)
     return matrix_padded
 
+
 class SingleAtomHamiltonian(nn.Module):
 
     def __init__(self, orbital_energies, trainable=False):
@@ -45,7 +46,7 @@ class SingleAtomHamiltonian(nn.Module):
         tmp2 = numbers[..., None].expand(-1, -1, basis.shape[-2])
         orb_mask = torch.gather(tmp1, 0, tmp2)
         h0 = self.orbital_energies[numbers]
-        #h0 = mask_padded_orbitals(h0, orb_mask, numbers.shape)
+        # h0 = mask_padded_orbitals(h0, orb_mask, numbers.shape)
         h0 = torch.masked_select(h0, orb_mask).reshape(numbers.shape[0], 1, -1)
         h0 = h0.expand(-1, h0.shape[2], -1)
         diag = torch.eye(h0.shape[1], device=h0.device)
@@ -351,7 +352,7 @@ class Hamiltonian(nn.Module):
             spk.nn.base.ScaleShift(mean, stddev)
         )
         self.atomagg = spk.nn.Aggregate(axis=1, mean=False)
-    
+
     def forward(self, inputs):
         Z = inputs['_atomic_numbers']
         nbh = inputs[SchNOrbProperties.neighbors]
@@ -397,11 +398,11 @@ class Hamiltonian(nn.Module):
         H = 0.5 * (H + H.permute((0, 2, 1)))
 
         # mask padded orbitals
-        #H = torch.masked_select(H, orb_mask > 0)
-        #orbs = int(math.sqrt(H.shape[0] / batch))
-        #orbs = H.s
-        #print (H.shape, batch, orbs)
-        #H = H.reshape(batch, orbs, orbs)
+        # H = torch.masked_select(H, orb_mask > 0)
+        # orbs = int(math.sqrt(H.shape[0] / batch))
+        # orbs = H.s
+        # print (H.shape, batch, orbs)
+        # H = H.reshape(batch, orbs, orbs)
         H = mask_padded_orbitals(H, orb_mask > 0, inputs[SchNOrbProperties.ham_prop].shape)
         if self.h0 is not None:
             H = H + self.h0(Z, self.basis_definition)
@@ -436,9 +437,9 @@ class Hamiltonian(nn.Module):
         S = 0.5 * (S + S.permute((0, 2, 1)))
 
         # mask padded orbitals
-        #S = torch.masked_select(S, orb_mask > 0)
-        #orbs = int(math.sqrt(S.shape[0] / batch))
-        #S = S.reshape(batch, orbs, orbs)
+        # S = torch.masked_select(S, orb_mask > 0)
+        # orbs = int(math.sqrt(S.shape[0] / batch))
+        # S = S.reshape(batch, orbs, orbs)
         S = mask_padded_orbitals(S, orb_mask > 0, inputs[SchNOrbProperties.ov_prop].shape)
 
         if self.s0 is not None:
