@@ -31,14 +31,160 @@ logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
 np.set_printoptions(linewidth=120, precision=3, suppress=True)
 
 
+class TensorboardHookModified(spk.train.TensorboardHook):
+    def __init__(self, *args, **kwargs):
+        super(TensorboardHookModified, self).__init__(*args, **kwargs)
+        self.each_n_batch = 100
+
+    def on_batch_end(self, trainer, train_batch, result, loss):
+        if self.log_train_loss:
+            n_samples = self._batch_size(result)
+            self._train_loss += float(loss.data) * n_samples
+            self._counter += n_samples
+        if self._counter % self.each_n_batch == 0:
+            print(loss.item(), file=open(os.path.join(self.log_path, "loss.log"), "a"))
+
+
+class CustomTrainer(spk.train.Trainer):
+    def __init__(self, *args, use_gradient_clipping=True, **kwargs):
+        super(CustomTrainer, self).__init__(*args, **kwargs)
+        self.use_gradient_clipping = use_gradient_clipping
+
+    def train(self, device, n_epochs=sys.maxsize):
+        """Train the model for the given number of epochs on a specified device.
+
+        Args:
+            device (torch.torch.Device): device on which training takes place.
+            n_epochs (int): number of training epochs.
+
+        Note: Depending on the `hooks`, training can stop earlier than `n_epochs`.
+
+        """
+        self._model.to(device)
+        self._optimizer_to(device)
+        self._stop = False
+
+        for h in self.hooks:
+            h.on_train_begin(self)
+
+        try:
+            for _ in range(n_epochs):
+                # increase number of epochs by 1
+                self.epoch += 1
+
+                for h in self.hooks:
+                    h.on_epoch_begin(self)
+
+                if self._stop:
+                    # decrease self.epoch if training is aborted on epoch begin
+                    self.epoch -= 1
+                    break
+
+                # perform training epoch
+                #                if progress:
+                #                    train_iter = tqdm(self.train_loader)
+                #                else:
+                train_iter = self.train_loader
+
+                for train_batch in train_iter:
+                    self.optimizer.zero_grad()
+
+                    for h in self.hooks:
+                        h.on_batch_begin(self, train_batch)
+
+                    # move input to gpu, if needed
+                    train_batch = {k: v.to(device) for k, v in train_batch.items()}
+
+                    result = self._model(train_batch)
+                    loss = self.loss_fn(train_batch, result)
+                    loss.backward()
+                    if self.use_gradient_clipping:
+                        torch.nn.utils.clip_grad_norm_(self._model.parameters(), 1.0)
+                    self.optimizer.step()
+                    self.step += 1
+
+                    for h in self.hooks:
+                        h.on_batch_end(self, train_batch, result, loss)
+
+                    torch.cuda.empty_cache()
+                    if self._stop:
+                        break
+
+                if self.epoch % self.checkpoint_interval == 0:
+                    self.store_checkpoint()
+
+                # validation
+                if self.epoch % self.validation_interval == 0 or self._stop:
+                    with torch.no_grad():
+                        for h in self.hooks:
+                            h.on_validation_begin(self)
+
+                        val_loss = 0.0
+                        n_val = 0
+                        for val_batch in self.validation_loader:
+                            # append batch_size
+                            vsize = list(val_batch.values())[0].size(0)
+                            n_val += vsize
+
+                            for h in self.hooks:
+                                h.on_validation_batch_begin(self)
+
+                            # move input to gpu, if needed
+                            val_batch = {k: v.to(device) for k, v in val_batch.items()}
+
+                            val_result = self._model(val_batch)
+                            val_batch_loss = (
+                                self.loss_fn(val_batch, val_result).data.cpu().numpy()
+                            )
+                            if self.loss_is_normalized:
+                                val_loss += val_batch_loss * vsize
+                            else:
+                                val_loss += val_batch_loss
+
+                            for h in self.hooks:
+                                h.on_validation_batch_end(self, val_batch, val_result)
+
+                            torch.cuda.empty_cache()
+
+                    # weighted average over batches
+                    if self.loss_is_normalized:
+                        val_loss /= n_val
+
+                    if self.best_loss > val_loss:
+                        self.best_loss = val_loss
+                        torch.save(self._model, self.best_model)
+
+                    for h in self.hooks:
+                        h.on_validation_end(self, val_loss)
+
+                for h in self.hooks:
+                    h.on_epoch_end(self)
+
+                if self._stop:
+                    break
+            #
+            # Training Ends
+            #
+            # run hooks & store checkpoint
+            for h in self.hooks:
+                h.on_train_ends(self)
+            self.store_checkpoint()
+
+        except Exception as e:
+            for h in self.hooks:
+                h.on_train_failed(self)
+
+            raise e
+
+
 def get_parser():
     """ Setup parser for command line arguments """
     main_parser = argparse.ArgumentParser()
 
     ## command-specific
     cmd_parser = argparse.ArgumentParser(add_help=False)
-    cmd_parser.add_argument('--cuda', help='Set flag to use GPU',
-                            action='store_true')
+    cmd_parser.add_argument('--cuda', help='Set flag to use GPU', type=bool,
+                            default=False)
     cmd_parser.add_argument('--logger',
                             help='Choose how to log training process',
                             choices=['csv', 'tensorboard'], default='csv')
@@ -47,6 +193,10 @@ def get_parser():
     cmd_parser.add_argument('--batch_size', type=int,
                             help='Number of validation scripts',
                             default=32)
+    cmd_parser.add_argument("--local_rank", metavar='INT', type=int, default=0,
+                            help="local rank for DDP")
+    cmd_parser.add_argument("--node_rank", metavar='INT', type=int, default=0,
+                            help="node rank for DDP")
 
     ## training
     train_parser = argparse.ArgumentParser(add_help=False,
@@ -86,7 +236,7 @@ def get_parser():
                               default=None)
     train_parser.add_argument('--split',
                               help='Split into [train] [validation] and remaining for testing',
-                              type=float, nargs=2, default=[None, None])
+                              type=float, default=None)
     train_parser.add_argument('--max_epochs', type=int,
                               help='Number of training epochs',
                               default=500000)
@@ -245,9 +395,9 @@ def train(args, model, train_loader, val_loader, device):
         hooks.append(logger)
     elif args.logger == 'tensorboard':
 
-        logger = spk.train.TensorboardHook(os.path.join(args.modelpath, 'log'),
-                                           metrics, log_histogram=True,
-                                           img_every_n_epochs=100)
+        logger = TensorboardHookModified(os.path.join(args.modelpath, 'log'),
+                                         metrics, log_histogram=True,
+                                         img_every_n_epochs=100)
         hooks.append(logger)
 
     # setup loss function
@@ -275,11 +425,11 @@ def train(args, model, train_loader, val_loader, device):
         if torch.sum(torch.isnan(err_sq)) > 0:
             print("NaN loss")
             return None
-
         return err_sq
 
-    trainer = spk.train.Trainer(args.modelpath, model, loss, optimizer,
-                                train_loader, val_loader, hooks=hooks)
+    trainer = CustomTrainer(args.modelpath, model, loss, optimizer,
+                            train_loader, val_loader, hooks=hooks)
+
     trainer.train(device)
 
 
@@ -455,11 +605,9 @@ def export_model(args, basisdef, orbital_energies, mean, stddev):
 
 
 if __name__ == '__main__':
-    sys.argv.insert(1,"schnet")
-    sys.argv.insert(1,"train")
+
     parser = get_parser()
     args = parser.parse_args()
-
     argparse_dict = vars(args)
     jsonpath = os.path.join(args.modelpath, 'args.json')
 
@@ -503,16 +651,23 @@ if __name__ == '__main__':
     if args.mode == 'train':
         if args.split_path is not None:
             copyfile(args.split_path, split_path)
-    print( len(hamiltonian_data))
+    print(len(hamiltonian_data))
+    train_split = train_args.split, 1 - train_args.split
     data_train, data_val, data_test = train_test_split(hamiltonian_data,
-                                                       *train_args.split, split_file=split_path)
+                                                       *train_split, split_file=split_path)
 
     if args.mode == 'train':
-        orbital_energies = data_train.calculate_property('orbital_energies')
+
+        orbital_energies_path = os.path.join(args.modelpath, 'orbital_energies.pt')
+        if os.path.exists(orbital_energies_path):
+            orbital_energies = torch.load(orbital_energies_path)
+        else:
+            orbital_energies = data_train.calculate_property('orbital_energies')
+            torch.save(orbital_energies, orbital_energies_path)
         print(orbital_energies)
     data_val.add_rotations = False
-    data_test.add_rotations = False
 
+    print(len(data_train))
     train_loader = spk.data.AtomsLoader(data_train, batch_size=args.batch_size,
                                         sampler=RandomSampler(data_train),
                                         num_workers=1, pin_memory=True)
@@ -521,9 +676,14 @@ if __name__ == '__main__':
                                       num_workers=1, pin_memory=True)
 
     if args.mode == 'train':
-        mean, stddev = train_loader.get_statistics(SchNOrbProperties.en_prop, True)
-        mean = mean[SchNOrbProperties.en_prop]
-        stddev = stddev[SchNOrbProperties.en_prop]
+        model_stats_path = os.path.join(args.modelpath, 'model_stats.pt')
+        if os.path.exists(model_stats_path):
+            [mean, stddev] = torch.load(model_stats_path)
+        else:
+            mean, stddev = train_loader.get_statistics(SchNOrbProperties.en_prop, True)
+            mean = mean[SchNOrbProperties.en_prop]
+            stddev = stddev[SchNOrbProperties.en_prop]
+            torch.save([mean, stddev], model_stats_path)
     else:
         mean, stddev = None, None
 
@@ -532,8 +692,7 @@ if __name__ == '__main__':
         sys.exit(0)
 
     device = torch.device("cuda" if args.cuda else "cpu")
-    # device = torch.device("cuda:1")
-    # device = torch.device("cpu")
+
     if args.mode == 'eval' or args.mode == 'pred':
         model = torch.load(os.path.join(args.modelpath, 'best_model'), map_location=device)
     else:
@@ -573,4 +732,3 @@ if __name__ == '__main__':
         np.savez(predict_file, **results, **inputs)
     else:
         print('Unknown mode:', args.mode)
-

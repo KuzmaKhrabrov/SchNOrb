@@ -45,9 +45,7 @@ class SingleAtomHamiltonian(nn.Module):
         tmp1 = (basis[:, None, :, 2] > 0).expand(-1, numbers.shape[1], -1)
         tmp2 = numbers[..., None].expand(-1, -1, basis.shape[-2])
         orb_mask = torch.gather(tmp1, 0, tmp2)
-        h0 = self.orbital_energies[numbers]
-        # h0 = mask_padded_orbitals(h0, orb_mask, numbers.shape)
-        h0 = torch.masked_select(h0, orb_mask).reshape(numbers.shape[0], 1, -1)
+        h0 = self.orbital_energies[numbers].reshape(numbers.shape[0], 1, -1)
         h0 = h0.expand(-1, h0.shape[2], -1)
         diag = torch.eye(h0.shape[1], device=h0.device)
         h0 = h0 * diag[None]
@@ -58,7 +56,7 @@ class SchNorbInteraction(nn.Module):
 
     def __init__(self, n_spatial_basis, n_factors, n_cosine_basis,
                  cutoff, cutoff_network,
-                 normalize_filter=False, dims=3, directions=None):
+                 normalize_filter=True, dims=3, directions=None):
         super(SchNorbInteraction, self).__init__()
         self.n_cosine_basis = n_cosine_basis
         self._dims = dims
@@ -170,7 +168,7 @@ class SchNOrb(nn.Module):
     def __init__(self, n_factors=64, lmax=4, n_interactions=2, cutoff=10.0,
                  n_gaussians=50, directions=4,
                  n_cosine_basis=5,
-                 normalize_filter=False, coupled_interactions=False,
+                 normalize_filter=True, coupled_interactions=False,
                  interaction_block=SchNorbInteraction,
                  cutoff_network=HardCutoff,
                  trainable_gaussians=False, max_z=36):
@@ -257,7 +255,8 @@ class SchNOrb(nn.Module):
 
         # spatial features: r_ij - distances, cos_ij direction cosines
         r_ij, cos_ij = self.distances(positions, neighbors, cell, cell_offset)
-        cos_ij = torch.nan_to_num(cos_ij)
+        # cos_ij = torch.nan_to_num(cos_ij)
+        cos_ij[torch.isnan(cos_ij)] = 0
         g_ij = self.distance_expansion(r_ij)
         ones = torch.ones(cos_ij.shape[:3] + (1,), device=cos_ij.device)
 
@@ -405,7 +404,8 @@ class Hamiltonian(nn.Module):
         # H = H.reshape(batch, orbs, orbs)
         H = mask_padded_orbitals(H, orb_mask > 0, inputs[SchNOrbProperties.ham_prop].shape)
         if self.h0 is not None:
-            H = H + self.h0(Z, self.basis_definition)
+            h0 = self.h0(Z, self.basis_definition)
+            H = H + mask_padded_orbitals(h0, orb_mask > 0, inputs[SchNOrbProperties.ham_prop].shape)
 
         del zeros
 
@@ -437,13 +437,11 @@ class Hamiltonian(nn.Module):
         S = 0.5 * (S + S.permute((0, 2, 1)))
 
         # mask padded orbitals
-        # S = torch.masked_select(S, orb_mask > 0)
-        # orbs = int(math.sqrt(S.shape[0] / batch))
-        # S = S.reshape(batch, orbs, orbs)
         S = mask_padded_orbitals(S, orb_mask > 0, inputs[SchNOrbProperties.ov_prop].shape)
 
         if self.s0 is not None:
-            S = S + self.s0(Z, self.basis_definition)
+            s0 = self.s0(Z, self.basis_definition)
+            S = S + mask_padded_orbitals(s0, orb_mask > 0, inputs[SchNOrbProperties.ov_prop].shape)
 
         # total energy
         Ei = self.atom_net(x)

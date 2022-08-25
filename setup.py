@@ -16,13 +16,14 @@ setup(
     url="https://github.com/atomistic-machine-learning/SchNOrb",
     packages=find_packages('src'),
     package_dir={'': 'src'},
-    python_requires=">=3.6",
+    python_requires=">=3.8",
     install_requires=[
         "torch>=1.1",
         "numpy",
         "schnetpack>=0.3",
         "spherical_functions",
         "tqdm",
+        "apsw"
     ],
     scripts=[
         "src/scripts/run_schnorb.py",
