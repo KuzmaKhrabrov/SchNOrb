@@ -402,8 +402,6 @@ def train(args, model, train_loader, val_loader, device):
 
     # setup loss function
     def loss(batch, result):
-        # print (batch[SchNOrbProperties.ham_prop].shape)
-        # print (result[SchNOrbProperties.ham_prop].shape)
         diff = batch[SchNOrbProperties.ham_prop] - result[SchNOrbProperties.ham_prop]
         diff = diff ** 2
         err_ham = torch.mean(diff)
@@ -651,7 +649,7 @@ if __name__ == '__main__':
     if args.mode == 'train':
         if args.split_path is not None:
             copyfile(args.split_path, split_path)
-    print(len(hamiltonian_data))
+
     train_split = train_args.split, 1 - train_args.split
     data_train, data_val, data_test = train_test_split(hamiltonian_data,
                                                        *train_split, split_file=split_path)
@@ -664,10 +662,9 @@ if __name__ == '__main__':
         else:
             orbital_energies = data_train.calculate_property('orbital_energies')
             torch.save(orbital_energies, orbital_energies_path)
-        print(orbital_energies)
+
     data_val.add_rotations = False
 
-    print(len(data_train))
     train_loader = spk.data.AtomsLoader(data_train, batch_size=args.batch_size,
                                         sampler=RandomSampler(data_train),
                                         num_workers=1, pin_memory=True)
